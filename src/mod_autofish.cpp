@@ -25,14 +25,20 @@ namespace
     uint32 sRequiredEquipId = 0;
     std::vector<uint32> sBobberEntries;
 
-    struct GuidHash { std::size_t operator()(ObjectGuid const& g) const noexcept { return std::hash<uint64>()(g.GetRawValue()); } };
+    struct GuidHash
+    {
+        std::size_t operator()(ObjectGuid const &g) const noexcept { return std::hash<uint64>()(g.GetRawValue()); }
+    };
 
     std::unordered_map<ObjectGuid, uint32, GuidHash> sRecastTimers;
 
-    struct PendingLoot { uint32 timer; };
+    struct PendingLoot
+    {
+        uint32 timer;
+    };
     std::unordered_map<ObjectGuid, PendingLoot, GuidHash> sLootTimers;
 
-    std::vector<uint32> ParseEntryList(std::string const& csv)
+    std::vector<uint32> ParseEntryList(std::string const &csv)
     {
         std::vector<uint32> out;
         std::stringstream ss(csv);
@@ -47,21 +53,23 @@ namespace
         return out;
     }
 
-    bool HasEquippedItem(Player* plr, uint32 entry)
+    bool HasEquippedItem(Player *plr, uint32 entry)
     {
-        if (!entry) return true;
+        if (!entry)
+            return true;
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
         {
-            if (Item* it = plr->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            if (Item *it = plr->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
                 if (it->GetEntry() == entry)
                     return true;
         }
         return false;
     }
 
-    bool RequirementMet(Player* plr)
+    bool RequirementMet(Player *plr)
     {
-        if (!plr) return false;
+        if (!plr)
+            return false;
         if (sRequiredItemId && !plr->HasItemCount(sRequiredItemId, 1, false))
             return false;
         if (sRequiredEquipId && !HasEquippedItem(plr, sRequiredEquipId))
@@ -69,18 +77,18 @@ namespace
         return true;
     }
 
-    void ScheduleRecast(Player* plr)
+    void ScheduleRecast(Player *plr)
     {
         if (!sAutoRecast || !plr || !plr->IsInWorld())
             return;
         sRecastTimers[plr->GetGUID()] = sRecastDelayMs;
     }
 
-    void ScheduleAutoLoot(Player* plr)
+    void ScheduleAutoLoot(Player *plr)
     {
         if (!sServerAutoLoot || !plr)
             return;
-        sLootTimers[plr->GetGUID()] = PendingLoot{ sAutoLootDelayMs };
+        sLootTimers[plr->GetGUID()] = PendingLoot{sAutoLootDelayMs};
     }
 
     void TickRecast(uint32 diff)
@@ -94,7 +102,7 @@ namespace
             }
             else
             {
-                Player* plr = ObjectAccessor::FindPlayer(it->first);
+                Player *plr = ObjectAccessor::FindPlayer(it->first);
                 if (plr && plr->IsInWorld() && plr->IsAlive() && !plr->IsInCombat() && RequirementMet(plr))
                     plr->CastSpell(plr, sRecastSpell, true);
                 it = sRecastTimers.erase(it);
@@ -113,23 +121,57 @@ namespace
                 continue;
             }
 
-            Player* plr = ObjectAccessor::FindPlayer(it->first);
+            Player *plr = ObjectAccessor::FindPlayer(it->first);
             if (plr && plr->IsInWorld() && RequirementMet(plr))
             {
                 ObjectGuid lootGuid = plr->GetLootGUID();
                 if (lootGuid.IsGameObject())
                 {
-                    if (GameObject* lootGo = ObjectAccessor::GetGameObject(*plr, lootGuid))
+                    if (GameObject *lootGo = ObjectAccessor::GetGameObject(*plr, lootGuid))
                     {
-                        Loot* loot = &lootGo->loot;
-                        for (uint32 i = 0; i < loot->items.size(); ++i)
+                        Loot *loot = &lootGo->loot;
+
+                        for (uint8 slot = 0; slot < loot->items.size(); ++slot)
                         {
-                            if (loot->items[i].is_looted)
+                            LootItem &li = loot->items[slot];
+                            if (li.is_looted)
                                 continue;
+
                             InventoryResult msg = EQUIP_ERR_OK;
-                            plr->StoreLootItem(uint8(i), loot, msg);
+                            plr->StoreLootItem(slot, loot, msg);
                         }
+
+                        const QuestItemMap &questItems = loot->GetPlayerQuestItems();
+                        if (!questItems.empty())
+                        {
+                            uint8 baseSlot = static_cast<uint8>(loot->items.size());
+                            for (uint8 i = 0; i < questItems.size(); ++i)
+                            {
+                                uint8 slot = baseSlot + i;
+                                InventoryResult msg = EQUIP_ERR_OK;
+                                plr->StoreLootItem(slot, loot, msg);
+                            }
+                        }
+
+                        const QuestItemMap &ffaItems = loot->GetPlayerFFAItems();
+                        if (!ffaItems.empty())
+                        {
+                            for (uint8 i = 0; i < ffaItems.size(); ++i)
+                            {
+                                uint8 slot = i;
+                                InventoryResult msg = EQUIP_ERR_OK;
+                                plr->StoreLootItem(slot, loot, msg);
+                            }
+                        }
+
+                        if (loot->gold > 0)
+                        {
+                            plr->ModifyMoney(loot->gold);
+                            loot->gold = 0;
+                        }
+
                         plr->SendLootRelease(lootGuid);
+
                         if (lootGo->GetGoType() == GAMEOBJECT_TYPE_FISHINGNODE)
                             lootGo->SetLootState(GO_JUST_DEACTIVATED);
                     }
@@ -140,16 +182,16 @@ namespace
         }
     }
 
-    void TryAutoFish(Player* plr)
+    void TryAutoFish(Player *plr)
     {
         if (!plr || !plr->IsInWorld() || !RequirementMet(plr))
             return;
 
-        std::list<GameObject*> nearList;
+        std::list<GameObject *> nearList;
         for (auto entry : sBobberEntries)
             plr->GetGameObjectListWithEntryInGrid(nearList, entry, sScanRange);
 
-        for (GameObject* go : nearList)
+        for (GameObject *go : nearList)
         {
             if (!go || go->GetOwnerGUID() != plr->GetGUID())
                 continue;
@@ -196,10 +238,10 @@ public:
         if (acc >= sTickMs)
         {
             acc = 0;
-            auto const& players = ObjectAccessor::GetPlayers();
-            for (auto const& kv : players)
+            auto const &players = ObjectAccessor::GetPlayers();
+            for (auto const &kv : players)
             {
-                Player* plr = kv.second;
+                Player *plr = kv.second;
                 if (!plr || !plr->IsInWorld() || plr->IsGameMaster())
                     continue;
                 TryAutoFish(plr);
